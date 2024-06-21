@@ -1,6 +1,7 @@
 const express = require('express');
 const mysql = require('mysql');
 const multer = require('multer');
+const cors = require('cors');
 const pdf = require('pdf-parse');
 const OpenAI = require('openai');
 const cosineSimilarity = require('compute-cosine-similarity');
@@ -41,7 +42,7 @@ connection.connect((err) => {
 
 // Middleware to parse JSON request bodies
 app.use(bodyParser.json());
-
+app.use(cors());
 // Multer setup for handling file uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
