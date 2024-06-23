@@ -8,8 +8,9 @@ const cosineSimilarity = require('compute-cosine-similarity');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
+const mammoth = require('mammoth');
 const util = require('util');
-
+const upload = multer({ dest: 'uploads/' });
 // Create Express app
 const app = express();
 const port = 3002;
@@ -43,6 +44,7 @@ connection.connect((err) => {
 // Middleware to parse JSON request bodies
 app.use(bodyParser.json());
 app.use(cors());
+
 // Multer setup for handling file uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -52,19 +54,13 @@ const storage = multer.diskStorage({
         cb(null, Date.now() + '-' + file.originalname);
     }
 });
-const upload = multer({ storage: storage });
+
 
 // Function to extract text from PDF file using pdf-parse
-const extractTextFromPDF = async (pdfPath) => {
-    try {
-        const dataBuffer = fs.readFileSync(pdfPath);
-        const pdfData = await pdf(dataBuffer);
-        return pdfData.text;
-    } catch (error) {
-        console.error('Error extracting text from PDF:', error);
-        throw error;
-    }
-};
+
+
+// Function to extract text from DOC file using mammoth
+
 
 // Function to generate embeddings using OpenAI's embedding model
 const generateEmbedding = async (text) => {
@@ -79,67 +75,100 @@ const generateEmbedding = async (text) => {
         throw error;
     }
 };
-
-// Function to store PDF embeddings in the database
-const storePdfEmbedding = async (pdfPath) => {
-    const pdfText = await extractTextFromPDF(pdfPath);
-    const embedding = await generateEmbedding(pdfText);
-
-    // Store the text and embedding in the database
-    const sql = "INSERT INTO myvectortable (text, vector) VALUES (?, ?)";
-    const values = [pdfText, JSON.stringify(embedding)];
-    connection.query(sql, values, (err, results) => {
-        if (err) throw err;
-        console.log('Embedding stored successfully');
-    });
-};
-//pdf upload  route
-
-// Route for uploading PDF files with title and automatically generated date metadata
-app.post('/upload', upload.single('pdfFile'), async (req, res) => {
+// Function to extract text from PDF file using pdf-parse
+const extractTextFromPDF = async (pdfPath) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
+        const dataBuffer = fs.readFileSync(pdfPath);
+        const pdfData = await pdf(dataBuffer);
+        return pdfData.text;
+    } catch (error) {
+        console.error('Error extracting text from PDF:', error);
+        throw error;
+    }
+};
+
+// Function to extract text from DOC file using mammoth
+const extractTextFromDOC = async (docPath) => {
+    try {
+        const result = await mammoth.extractRawText({ path: docPath });
+        return result.value;
+    } catch (error) {
+        console.error('Error extracting text from DOC:', error);
+        throw error;
+    }
+};
+
+app.post('/uploadnotes', upload.array('files', 5), async (req, res) => {
+    try {
+        const files = req.files; // Array of uploaded files
+        const { title } = req.body; // Assuming title is the same for all files
+
+        if (!files || files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        const { title } = req.body; // Extract title from request body
-        const pdfPath = req.file.path; // File path where the uploaded PDF is stored
+        if (!title) {
+            return res.status(400).json({ error: 'Title is required' });
+        }
 
-        // Extract text from PDF file
-        const pdfText = await extractTextFromPDF(pdfPath);
+        let combinedText = ''; // Variable to store the combined text from all files
 
-        // Generate embedding from extracted text
-        const embedding = await generateEmbedding(pdfText);
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const filePath = file.path;
+            const fileMimeType = file.mimetype;
+            try {
+                let fileText;
 
-        // Store in database (myvectortable)
+                // Determine the file type and extract text accordingly
+                if (fileMimeType === 'application/pdf') {
+                    fileText = await extractTextFromPDF(filePath);
+                } else if (fileMimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    fileText = await extractTextFromDOC(filePath);
+                } else {
+                    throw new Error(`Unsupported file type: ${fileMimeType}`);
+                }
+
+                // Append the extracted text to the combined text
+                combinedText += fileText + ' ';
+
+                // Clean up: Delete the uploaded file from disk after processing
+                fs.unlinkSync(filePath);
+
+            } catch (error) {
+                console.error('Error processing file:', error);
+                // Clean up: Delete the uploaded file from disk if an error occurs
+                fs.unlinkSync(filePath);
+                throw error; // Rethrow the error to be caught in the main try-catch block
+            }
+        }
+
+        // Generate embedding from the combined text
+        const embedding = await generateEmbedding(combinedText);
+
+        // Prepare SQL statement for insertion
         const sql = "INSERT INTO myvectortable (title, text, vector) VALUES (?, ?, ?)";
-        const values = [title, pdfText, JSON.stringify(embedding)];
+        const values = [title, combinedText.trim(), JSON.stringify(embedding)];
 
+        // Insert the combined text and embedding into the database
         connection.query(sql, values, (err, results) => {
             if (err) {
-                console.error('Error storing PDF embedding:', err);
-                res.status(500).json({ error: 'Error storing PDF embedding' });
-                return;
+                console.error('Error storing file embedding:', err);
+                return res.status(500).json({ error: 'Error storing file embedding' });
+            } else {
+                console.log('File embedding stored successfully');
+                res.status(200).json({ message: 'Files uploaded and processed successfully' });
             }
-            console.log('PDF embedding stored successfully');
-            res.status(200).json({ message: 'PDF uploaded and processed successfully' });
         });
 
     } catch (error) {
-        console.error('Error uploading PDF:', error);
-        res.status(500).json({ error: 'Error uploading PDF' });
-    } finally {
-        // Clean up: Delete the uploaded file from disk
-        if (req.file) {
-            const filePath = path.join(__dirname, req.file.path);
-            fs.unlinkSync(filePath); // Delete the file synchronously
-        }
+        console.error('Error uploading files:', error);
+        res.status(500).json({ error: 'Error uploading files' });
     }
 });
 
 
-
-//with chatgpt embeedings
+//ute to ask a question about a specific file
 app.post('/ask/:id', async (req, res) => {
     const { question } = req.body;
     const id = req.params.id;
@@ -193,7 +222,8 @@ app.post('/ask/:id', async (req, res) => {
     }
 });
 
-app.get('/pdf-list', async (req, res) => {
+// Route to get list of PDFs
+app.get('/notefiles', async (req, res) => {
     try {
         // Query to retrieve id, title, and date from myvectortable
         const sql = "SELECT id, title, date FROM myvectortable";
@@ -202,20 +232,18 @@ app.get('/pdf-list', async (req, res) => {
         const results = await query(sql);
 
         // Return list of id, title, and date
-        res.status(200).json({ pdfFiles: results });
+        res.status(200).json(results);
     } catch (error) {
         console.error('Error fetching PDF list:', error);
         res.status(500).json({ error: 'Error fetching PDF list' });
     }
 });
-
-
-app.get('/pdf/:id', async (req, res) => {
+app.get('/notefile/:id', async (req, res) => {
     const { id } = req.params;
 
     try {
         // Query to retrieve title, date, and other information from myvectortable based on id
-        const sql = "SELECT id, title, date FROM myvectortable WHERE id = ?";
+        const sql = "SELECT * FROM myvectortable WHERE id = ?";
         
         // Execute query with id as parameter
         const results = await query(sql, [id]);
@@ -234,22 +262,22 @@ app.get('/pdf/:id', async (req, res) => {
     }
 });
 
-app.delete('/pdf/:id', async (req, res) => {
+app.delete('/notefile/:id', async (req, res) => {
     const { id } = req.params;
 
     try {
-        // Query to delete the PDF file from myvectortable based on id
+        // Query to delete the record from myvectortable based on id
         const sql = "DELETE FROM myvectortable WHERE id = ?";
-        
-        // Execute delete query with id as parameter
+
+        // Execute query with id as parameter
         const result = await query(sql, [id]);
 
-        // Check if no rows were affected (PDF with given id not found)
+        // Check if any rows were affected (i.e., if the record was deleted)
         if (result.affectedRows === 0) {
             return res.status(404).json({ error: 'PDF not found' });
         }
 
-        // Return success message
+        // Return a success message
         res.status(200).json({ message: 'PDF deleted successfully' });
     } catch (error) {
         console.error('Error deleting PDF:', error);
@@ -257,11 +285,7 @@ app.delete('/pdf/:id', async (req, res) => {
     }
 });
 
-
-
-
-
 // Start the server
 app.listen(port, () => {
-    console.log(`Server is running at http://localhost:${port}`);
+    console.log(`Server is running on http://localhost:${port}`);
 });
