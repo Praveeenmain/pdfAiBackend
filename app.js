@@ -101,14 +101,14 @@ const extractTextFromDOC = async (docPath) => {
 app.post('/uploadnotes', upload.array('files', 5), async (req, res) => {
     try {
         const files = req.files; // Array of uploaded files
-        const { title } = req.body; // Assuming title is the same for all files
+        const { title, category, exam, paper, subject, topics } = req.body; // Assuming these fields are sent in the request body
 
         if (!files || files.length === 0) {
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        if (!title) {
-            return res.status(400).json({ error: 'Title is required' });
+        if (!title || !category || !exam || !paper || !subject || !topics) {
+            return res.status(400).json({ error: 'All fields (title, category, exam, paper, subject, topics) are required' });
         }
 
         let combinedText = ''; // Variable to store the combined text from all files
@@ -147,8 +147,8 @@ app.post('/uploadnotes', upload.array('files', 5), async (req, res) => {
         const embedding = await generateEmbedding(combinedText);
 
         // Prepare SQL statement for insertion
-        const sql = "INSERT INTO myvectortable (title, text, vector) VALUES (?, ?, ?)";
-        const values = [title, combinedText.trim(), JSON.stringify(embedding)];
+        const sql = "INSERT INTO myvectortable (title, category, exam, paper, subject, topics, text, vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        const values = [title, category, exam, paper, subject, topics, combinedText.trim(), JSON.stringify(embedding)];
 
         // Insert the combined text and embedding into the database
         connection.query(sql, values, (err, results) => {
@@ -166,8 +166,6 @@ app.post('/uploadnotes', upload.array('files', 5), async (req, res) => {
         res.status(500).json({ error: 'Error uploading files' });
     }
 });
-
-
 //ute to ask a question about a specific file
 app.post('/ask/:id', async (req, res) => {
     const { question } = req.body;
