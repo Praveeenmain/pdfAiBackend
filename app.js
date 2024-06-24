@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const mammoth = require('mammoth');
 const util = require('util');
-const upload = multer({ dest: 'uploads/' });
+
 // Create Express app
 const app = express();
 const port = 3002;
@@ -29,8 +29,10 @@ const dbConfig = {
     database: 'pdf',
     port: 3306 // SingleStore default port
 };
+
 const connection = mysql.createConnection(dbConfig);
 const query = util.promisify(connection.query).bind(connection);
+
 
 // Connect to the database
 connection.connect((err) => {
@@ -44,7 +46,8 @@ connection.connect((err) => {
 // Middleware to parse JSON request bodies
 app.use(bodyParser.json());
 app.use(cors());
-
+const pool = mysql.createPool(dbConfig);
+  
 // Multer setup for handling file uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -55,26 +58,18 @@ const storage = multer.diskStorage({
     }
 });
 
-
-// Function to extract text from PDF file using pdf-parse
-
-
-// Function to extract text from DOC file using mammoth
-
-
-// Function to generate embeddings using OpenAI's embedding model
-const generateEmbedding = async (text) => {
-    try {
-        const response = await openai.embeddings.create({
-            model: "text-embedding-ada-002",
-            input: text
-        });
-        return response.data[0].embedding;
-    } catch (error) {
-        console.error("Error generating embedding:", error);
-        throw error;
+// Multer upload configuration with file size limits and error handling
+const upload = multer({
+    storage,
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype.startsWith('audio') || file.mimetype === 'application/pdf' || file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            cb(null, true);
+        } else {
+            cb(new Error('Unsupported file format. Supported formats: mp3, wav, ogg, pdf, docx, etc.'));
+        }
     }
-};
+});
+
 // Function to extract text from PDF file using pdf-parse
 const extractTextFromPDF = async (pdfPath) => {
     try {
@@ -98,7 +93,266 @@ const extractTextFromDOC = async (docPath) => {
     }
 };
 
-app.post('/uploadnotes', upload.array('files', 5), async (req, res) => {
+// Function to generate embeddings using OpenAI's embedding model
+const generateEmbedding = async (text) => {
+    try {
+        const response = await openai.embeddings.create({
+            model: "text-embedding-ada-002",
+            input: text
+        });
+        return response.data[0].embedding;
+    } catch (error) {
+        console.error("Error generating embedding:", error);
+        throw error;
+    }
+};
+
+// Function to transcribe audio using OpenAI
+const audioFun = async (audioBuffer) => {
+    try {
+        const transcription = await openai.audio.transcriptions.create({
+            file: audioBuffer,
+            model: "whisper-1",
+            target_language: "en"
+        });
+        return transcription.text;
+    } catch (error) {
+        console.error("Error transcribing audio:", error);
+        throw error;
+    }
+};
+
+// New function to generate a title from the transcription text
+const generateTitle = async (text) => {
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+                {
+                    role: "system",
+                    content: "Generate a concise and informative title for the following text:"
+                },
+                {
+                    role: "user",
+                    content: text
+                }
+            ]
+        });
+        return response.choices[0].message.content.trim();
+    } catch (error) {
+        console.error("Error generating title:", error);
+        throw error;
+    }
+};
+
+// Endpoint to upload and transcribe audio
+app.post('/upload-transcribe', (req, res) => {
+    upload.single('audio')(req, res, async (err) => {
+        if (err) {
+            console.error('Error uploading file:', err);
+            return res.status(500).send('Error uploading file.');
+        }
+
+        try {
+            if (!req.file) {
+                return res.status(400).send('No audio file uploaded.');
+            }
+
+            const audioPath = req.file.path;
+            const audioReadStream = fs.createReadStream(audioPath);
+            const transcriptionText = await audioFun(audioReadStream);
+            if (!transcriptionText) {
+                return res.status(500).send('Error in transcription.');
+            }
+
+            const title = await generateTitle(transcriptionText);
+            const embedding = await generateEmbedding(transcriptionText);
+            const currentDate = new Date();
+
+            // Read audio file as buffer
+            const audioBuffer = fs.readFileSync(audioPath);
+
+            // Insert into SQL database
+            const sql = 'INSERT INTO Audio (title, transcription, audio, embedding, date) VALUES (?, ?, ?, ?, ?)';
+            const values = [title, transcriptionText, audioBuffer, JSON.stringify(embedding), currentDate];
+            await query(sql, values);
+
+            // Clean up: delete uploaded file
+            fs.unlinkSync(audioPath);
+
+            res.status(200).json({
+                title: title,
+                transcription: transcriptionText,
+                date: currentDate
+            });
+
+        } catch (error) {
+            console.error('Error processing request:', error);
+            res.status(500).send('Error processing request.');
+        }
+    });
+});
+
+// Endpoint to ask a question based on stored audio transcription
+app.post('/audioask/:id', async (req, res) => {
+    try {
+        const { question } = req.body;
+        const id = req.params.id;
+
+        if (!question) {
+            return res.status(400).send('Question is required.');
+        }
+
+        // Generate embedding for the question
+        const questionEmbedding = await generateEmbedding(question);
+
+        // Retrieve stored transcription and embedding from the database
+        const sql = "SELECT transcription, embedding FROM Audio WHERE id = ?";
+        connection.query(sql, [id], async (err, results) => {
+            if (err) {
+                console.error('Error querying database:', err);
+                return res.status(500).json({ error: 'Error querying database' });
+            }
+
+            if (results.length === 0) {
+                return res.status(404).json({ error: 'No data found for the provided ID' });
+            }
+
+            try {
+                const transcription = results[0].transcription;
+                const embedding = JSON.parse(results[0].embedding);
+
+                // Calculate similarity between question embedding and audio embedding
+                const similarity = cosineSimilarity(questionEmbedding, embedding);
+
+                // Use OpenAI to generate a response based on the retrieved transcription and the question
+                const response = await openai.chat.completions.create({
+                    model: "gpt-4o",
+                    messages: [
+                        { role: "system", content: "You are a helpful assistant." },
+                        { role: "user", content: `Answer the question based on the following context:\n\n${transcription}\n\nQuestion: ${question}` }
+                    ],
+                    max_tokens: 200
+                });
+
+                const answer = response.choices[0].message.content.trim();
+                res.status(200).json({ answer: answer, similarity: similarity });
+            } catch (error) {
+                console.error('Error generating response:', error);
+                res.status(500).json({ error: 'Error generating response' });
+            }
+        });
+    } catch (error) {
+        console.error('Error processing request:', error);
+        res.status(500).json({ error: 'Error processing request' });
+    }
+});
+
+app.get('/audiofiles', async (req, res) => {
+    try {
+        // Query to retrieve id, title, and date from myvectortable
+        const sql = "SELECT id, title, date FROM Audio";
+
+        // Execute query
+        const results = await query(sql);
+
+        // Return list of id, title, and date
+        res.status(200).json(results);
+    } catch (error) {
+        console.error('Error fetching Audio list:', error);
+        res.status(500).json({ error: 'Error fetching Audio list' });
+    }
+});
+app.get('/audiofile/:id', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Query to retrieve title, date, and other information from myvectortable based on id
+        const sql = "SELECT * FROM Audio WHERE id = ?";
+        
+        // Execute query with id as parameter
+        const results = await query(sql, [id]);
+
+        // Check if results are empty
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Audio not found' });
+        }
+
+        // Return title, date, and other information
+        const AudioFile = results[0];
+        res.status(200).json({ AudioFile });
+    } catch (error) {
+        console.error('Error fetching Audio:', error);
+        res.status(500).json({ error: 'Error fetching Audiofiles' });
+    }
+});
+
+app.delete('/audiofile/:id', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Query to delete the record from myvectortable based on id
+        const sql = "DELETE FROM Audio WHERE id = ?";
+
+        // Execute query with id as parameter
+        const result = await query(sql, [id]);
+
+        // Check if any rows were affected (i.e., if the record was deleted)
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Audio not found' });
+        }
+
+        // Return a success message
+        res.status(200).json({ message: 'Audio deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting PDF:', error);
+        res.status(500).json({ error: 'Error deleting Audio' });
+    }
+});
+// PUT endpoint for updating audio files
+
+// PUT endpoint for updating audio files
+// PUT endpoint for updating audio file title by ID
+app.put('/updateTitle/:id', (req, res) => {
+    const audioId = req.params.id;
+    const { title } = req.body; // Assuming you only want to update the title
+    
+    // Validate audioId as an integer (assuming id is numeric)
+    if (isNaN(audioId)) {
+      return res.status(400).json({ message: 'Invalid audio file ID.' });
+    }
+    
+    // Validate title
+    if (!title || typeof title !== 'string') {
+      return res.status(400).json({ message: 'Invalid or missing title.' });
+    }
+    
+    // Query to update the audio file title
+    const sql = 'UPDATE Audio SET title = ? WHERE id = ?';
+    
+    // Execute the query
+    pool.query(sql, [title, audioId], (error, results) => {
+      if (error) {
+        console.error('Error updating audio file:', error);
+        return res.status(500).json({ message: 'Error updating audio file.', error: error.message });
+      }
+    
+      // Check if the audio file was found and updated
+      if (results.affectedRows === 0) {
+        return res.status(404).json({ message: 'Audio file not found.' });
+      }
+    
+      // Audio file title updated successfully
+      res.status(200).json({ message: 'Audio file title updated successfully.' });
+    });
+  });
+  
+  
+  
+  
+
+// Endpoint to upload and store notes
+app.post('/uploadnotes', upload.array('files', 3), async (req, res) => {
     try {
         const files = req.files; // Array of uploaded files
         const { title, category, exam, paper, subject, topics } = req.body; // Assuming these fields are sent in the request body
@@ -283,7 +537,8 @@ app.delete('/notefile/:id', async (req, res) => {
     }
 });
 
+
 // Start the server
 app.listen(port, () => {
-    console.log(`Server is running on http://localhost:${port}`);
+    console.log(`Server running on http://localhost:${port}`);
 });
