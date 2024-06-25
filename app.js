@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const mammoth = require('mammoth');
 const util = require('util');
-
+const ytdl = require('ytdl-core');
 // Create Express app
 const app = express();
 const port = 3002;
@@ -309,9 +309,9 @@ app.delete('/audiofile/:id', async (req, res) => {
         res.status(500).json({ error: 'Error deleting Audio' });
     }
 });
-// PUT endpoint for updating audio files
 
-// PUT endpoint for updating audio files
+
+
 // PUT endpoint for updating audio file title by ID
 app.put('/updateTitle/:id', (req, res) => {
     const audioId = req.params.id;
@@ -534,6 +534,186 @@ app.delete('/notefile/:id', async (req, res) => {
     } catch (error) {
         console.error('Error deleting PDF:', error);
         res.status(500).json({ error: 'Error deleting PDF' });
+    }
+});
+
+//youtube videos
+
+app.post('/youtube-transcribe', async (req, res) => {
+    const { videoUrl } = req.body;
+
+    if (!videoUrl || !ytdl.validateURL(videoUrl)) {
+        return res.status(400).send('Invalid YouTube video URL.');
+    }
+
+    try {
+        // Download the audio from the YouTube video
+        const audioPath = `uploads/${Date.now()}.mp3`;
+        const audioStream = ytdl(videoUrl, { filter: 'audioonly' }).pipe(fs.createWriteStream(audioPath));
+
+        audioStream.on('finish', async () => {
+            try {
+                const audioReadStream = fs.createReadStream(audioPath);
+                const transcriptionText = await audioFun(audioReadStream);
+                if (!transcriptionText) {
+                    return res.status(500).send('Error in transcription.');
+                }
+
+                const title = await generateTitle(transcriptionText);
+                const embedding = await generateEmbedding(transcriptionText);
+                const currentDate = new Date();
+
+                // Insert into SQL database
+                const sql = 'INSERT INTO YouTube (title, transcription, videoUrl, embedding, date) VALUES (?, ?, ?, ?, ?)';
+                const values = [title, transcriptionText, videoUrl, JSON.stringify(embedding), currentDate];
+                await query(sql, values);
+
+                // Clean up: delete downloaded file
+                fs.unlinkSync(audioPath);
+
+                res.status(200).json({
+                    title: title,
+                    transcription: transcriptionText,
+                    date: currentDate
+                });
+            } catch (error) {
+                console.error('Error processing request:', error);
+                res.status(500).send('Error processing request.');
+            }
+        });
+
+        audioStream.on('error', (error) => {
+            console.error('Error downloading YouTube audio:', error);
+            res.status(500).send('Error downloading YouTube audio.');
+        });
+    } catch (error) {
+        console.error('Error processing request:', error);
+        res.status(500).send('Error processing request.');
+    }
+});
+
+app.post('/youtube-ask/:id', async (req, res) => {
+    const { question } = req.body;
+    const id = req.params.id;
+
+    if (!question || !id) {
+        return res.status(400).json({ error: 'Question and ID are required' });
+    }
+
+    try {
+        const questionEmbedding = await generateEmbedding(question);
+
+        // Retrieve specific embedding and transcription from the YouTube table based on ID
+        const sql = "SELECT transcription, embedding FROM YouTube WHERE id = ?";
+        connection.query(sql, [id], async (err, results) => {
+            if (err) {
+                console.error('Error querying database:', err);
+                res.status(500).json({ error: 'Error querying database' });
+                return;
+            }
+
+            console.log('Query results:', results);  // Debug log
+
+            if (results.length === 0) {
+                return res.status(404).json({ error: 'No data found for the provided ID' });
+            }
+
+            // Extract transcription and embedding from the result
+            const transcription = results[0].transcription;
+            const embedding = JSON.parse(results[0].embedding);
+
+            // Calculate similarity with the retrieved embedding
+            const similarity = cosineSimilarity(questionEmbedding, embedding);
+
+            // Use OpenAI to generate a response based on the retrieved transcription
+            openai.chat.completions.create({
+                model: "gpt-4o",
+                messages: [
+                    { role: "system", content: "You are a helpful assistant." },
+                    { role: "user", content: `Answer the question based on the following context:\n\n${transcription}\n\nQuestion: ${question}` }
+                ],
+                max_tokens: 200
+            }).then(response => {
+                const answer = response.choices[0].message.content.trim();
+                res.status(200).json({ answer: answer, similarity: similarity });
+            }).catch(error => {
+                console.error('Error generating response:', error);
+                res.status(500).json({ error: 'Error generating response' });
+            });
+        });
+    } catch (error) {
+        console.error('Error processing request:', error);
+        res.status(500).json({ error: 'Error processing request' });
+    }
+});
+
+app.get('/videos', async (req, res) => {
+    try {
+        // Query to retrieve id, title, and date from YouTube table
+        const sql = "SELECT id, title, date FROM YouTube";
+
+        // Execute query using util.promisify with connection.query
+        const results = await query(sql);
+
+        // Return list of id, title, and date
+        res.status(200).json(results);
+    } catch (error) {
+        console.error('Error fetching YouTube list:', error);
+        res.status(500).json({ error: 'Error fetching YouTube list' });
+    }
+});
+
+// Assuming you have already defined 'query' and 'app' in your code
+
+// API endpoint to fetch a video by id
+app.get('/videos/:id', async (req, res) => {
+    const videoId = req.params.id; // Retrieve id from URL parameter
+
+    try {
+        // Query to retrieve video by id from YouTube table
+        const sql = "SELECT * FROM YouTube WHERE id = ?";
+
+        // Execute query using util.promisify with connection.query
+        const results = await query(sql, [videoId]);
+
+        // Check if video with the given id exists
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Return the video object
+        res.status(200).json(results[0]); // Assuming id is unique, so only one result
+
+    } catch (error) {
+        console.error('Error fetching YouTube video:', error);
+        res.status(500).json({ error: 'Error fetching YouTube video' });
+    }
+});
+
+// Assuming you have already defined 'query' and 'app' in your code
+
+// API endpoint to delete a video by id
+app.delete('/videos/:id', async (req, res) => {
+    const videoId = req.params.id; // Retrieve id from URL parameter
+
+    try {
+        // Query to delete video by id from YouTube table
+        const sql = "DELETE FROM YouTube WHERE id = ?";
+
+        // Execute query using util.promisify with connection.query
+        const results = await query(sql, [videoId]);
+
+        // Check if a video was deleted (results.affectedRows will be 1 if deleted)
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Return success message
+        res.status(200).json({ message: 'Video deleted successfully' });
+
+    } catch (error) {
+        console.error('Error deleting YouTube video:', error);
+        res.status(500).json({ error: 'Error deleting YouTube video' });
     }
 });
 

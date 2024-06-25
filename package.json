@@ -27,7 +27,8 @@
     "pptx2json": "^0.0.8",
     "pptxgenjs": "^3.12.0",
     "util": "^0.12.5",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "ytdl-core": "^4.11.5"
   },
   "devDependencies": {
     "any-text": "^1.2.0"
