@@ -852,6 +852,56 @@ app.post('/askprevious/:id', async (req, res) => {
 });
 
 
+app.get('/pqfiles', (req, res) => {
+    const sql = "SELECT id, title, date FROM previouspapers";
+
+    connection.query(sql, (err, results) => {
+        if (err) {
+            console.error('Error querying database:', err);
+            return res.status(500).json({ error: 'Error querying database' });
+        }
+
+        res.status(200).json(results);
+    });
+});
+
+app.get('/pqfile/:id', (req, res) => {
+    const id = req.params.id;
+
+    const sql = "SELECT * FROM previouspapers WHERE id = ?";
+    connection.query(sql, [id], (err, results) => {
+        if (err) {
+            console.error('Error querying database:', err);
+            return res.status(500).json({ error: 'Error querying database' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'No data found for the provided ID' });
+        }
+
+        res.status(200).json(results[0]);
+    });
+});
+
+app.delete('/pqfile/:id', (req, res) => {
+    const id = req.params.id;
+
+    const sql = "DELETE FROM previouspapers WHERE id = ?";
+    connection.query(sql, [id], (err, results) => {
+        if (err) {
+            console.error('Error querying database:', err);
+            return res.status(500).json({ error: 'Error querying database' });
+        }
+
+        if (results.affectedRows === 0) {
+            return res.status(404).json({ error: 'No data found for the provided ID' });
+        }
+
+        res.status(200).json({ message: 'File deleted successfully' });
+    });
+});
+
+
 
 
 
