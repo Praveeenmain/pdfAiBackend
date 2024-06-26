@@ -70,6 +70,7 @@ const upload = multer({
     }
 });
 
+
 // Function to extract text from PDF file using pdf-parse
 const extractTextFromPDF = async (pdfPath) => {
     try {
@@ -144,6 +145,10 @@ const generateTitle = async (text) => {
         throw error;
     }
 };
+
+
+
+
 
 // Endpoint to upload and transcribe audio
 app.post('/upload-transcribe', (req, res) => {
@@ -716,6 +721,140 @@ app.delete('/videos/:id', async (req, res) => {
         res.status(500).json({ error: 'Error deleting YouTube video' });
     }
 });
+
+//Class Tests
+app.post('/uploadpapers', upload.array('files', 3), async (req, res) => {
+    try {
+        const files = req.files; // Array of uploaded files
+
+        if (!files || files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+
+        let combinedText = ''; // Variable to store the combined text from all files
+
+        for (const file of files) {
+            const filePath = file.path;
+            const fileMimeType = file.mimetype;
+            try {
+                let fileText;
+
+                // Determine the file type and extract text accordingly
+                if (fileMimeType === 'application/pdf') {
+                    fileText = await extractTextFromPDF(filePath);
+                } else if (fileMimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                    fileText = await extractTextFromDOC(filePath);
+                } else {
+                    throw new Error(`Unsupported file type: ${fileMimeType}`);
+                }
+
+                // Append the extracted text to the combined text
+                combinedText += fileText + ' ';
+
+                // Clean up: Delete the uploaded file from disk after processing
+                fs.unlinkSync(filePath);
+
+            } catch (error) {
+                console.error('Error processing file:', error);
+                // Clean up: Delete the uploaded file from disk if an error occurs
+                fs.unlinkSync(filePath);
+                throw error; // Rethrow the error to be caught in the main try-catch block
+            }
+        }
+
+        // Generate a title based on the combined text
+        const generatedTitle = await generateTitle(combinedText);
+
+        // Generate embedding from the combined text
+        const embedding = await generateEmbedding(combinedText);
+
+        // Get the current date
+        const currentDate = new Date().toISOString().split('T')[0];
+
+        // Prepare SQL statement for insertion into 'previouspapers' table using parameterized query
+        const sql = "INSERT INTO previouspapers (title, text, vector, date) VALUES (?, ?, ?, ?)";
+        const values = [generatedTitle, combinedText.trim(), JSON.stringify(embedding), currentDate];
+
+        // Log values to debug any potential issues
+        console.log('SQL Query:', sql);
+        console.log('Values:', values);
+
+        // Insert the combined text and embedding into the 'previouspapers' table
+        connection.query(sql, values, (err, results) => {
+            if (err) {
+                console.error('Error storing file embedding:', err.message);
+                return res.status(500).json({ error: 'Error storing file embedding' });
+            } else {
+                console.log('File embedding stored successfully');
+                res.status(200).json({ message: 'Files uploaded and processed successfully' });
+            }
+        });
+
+    } catch (error) {
+        console.error('Error uploading files:', error);
+        res.status(500).json({ error: 'Error uploading files' });
+    }
+});
+
+app.post('/askprevious/:id', async (req, res) => {
+    const { question } = req.body;
+    const id = req.params.id;
+
+    if (!question || !id) {
+        return res.status(400).json({ error: 'Question and ID are required' });
+    }
+
+    try {
+        const questionEmbedding = await generateEmbedding(question);
+
+        // Retrieve specific text from the 'previouspapers' table based on ID
+        const sql = "SELECT text FROM previouspapers WHERE id = ?";
+        connection.query(sql, [id], async (err, results) => {
+            if (err) {
+                console.error('Error querying database:', err);
+                return res.status(500).json({ error: 'Error querying database' });
+            }
+
+            if (results.length === 0) {
+                return res.status(404).json({ error: 'No data found for the provided ID' });
+            }
+
+            // Extract text from the result
+            const text = results[0].text;
+
+            // Use OpenAI to generate a new question based on the retrieved text
+            try {
+                const response = await openai.chat.completions.create({
+                    model: "gpt-4o",
+                    messages: [
+                        { role: "system", content: "Generate new questions based on the provided message:" },
+                        { role: "user", content: text }
+                    ],
+                    max_tokens: 100
+                });
+
+                const generatedQuestion = response.choices[0].message.content.trim();
+
+                // Now, use the generated question to calculate similarity with the provided question
+                const generatedQuestionEmbedding = await generateEmbedding(generatedQuestion);
+                const similarity = cosineSimilarity(questionEmbedding, generatedQuestionEmbedding);
+
+                res.status(200).json({ generatedQuestion: generatedQuestion, similarity: similarity });
+            } catch (error) {
+                console.error('Error generating response:', error);
+                res.status(500).json({ error: 'Error generating response' });
+            }
+        });
+    } catch (error) {
+        console.error('Error processing request:', error);
+        res.status(500).json({ error: 'Error processing request' });
+    }
+});
+
+
+
+
+
 
 
 // Start the server
