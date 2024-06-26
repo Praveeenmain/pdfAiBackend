@@ -70,6 +70,18 @@ const upload = multer({
     }
 });
 
+function formatDateToMySQL(datetime) {
+    const pad = (number) => number.toString().padStart(2, '0');
+
+    const year = datetime.getFullYear();
+    const month = pad(datetime.getMonth() + 1);
+    const day = pad(datetime.getDate());
+    const hours = pad(datetime.getHours());
+    const minutes = pad(datetime.getMinutes());
+    const seconds = pad(datetime.getSeconds());
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
 
 // Function to extract text from PDF file using pdf-parse
 const extractTextFromPDF = async (pdfPath) => {
@@ -769,7 +781,7 @@ app.post('/uploadpapers', upload.array('files', 3), async (req, res) => {
         const embedding = await generateEmbedding(combinedText);
 
         // Get the current date
-        const currentDate = new Date().toISOString().split('T')[0];
+        const currentDate = formatDateToMySQL(new Date());
 
         // Prepare SQL statement for insertion into 'previouspapers' table using parameterized query
         const sql = "INSERT INTO previouspapers (title, text, vector, date) VALUES (?, ?, ?, ?)";
