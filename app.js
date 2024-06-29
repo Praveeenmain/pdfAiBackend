@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql');
 const multer = require('multer');
@@ -14,7 +15,7 @@ const ytdl = require('ytdl-core');
 // Create Express app
 const app = express();
 const port = 3002;
-
+const CLIENT_ID = process.env.CLIENT_ID;
 // OpenAI API setup
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // Make sure to set this environment variable
 const openai = new OpenAI({
@@ -23,11 +24,11 @@ const openai = new OpenAI({
 
 // MySQL database connection configuration
 const dbConfig = {
-    host: 'svc-9f73fbe3-1953-4c37-8f05-ec27251992ee-dml.aws-oregon-4.svc.singlestore.com',
-    user: 'admin',
-    password: 'Praveen.123',
-    database: 'pdf',
-    port: 3306 // SingleStore default port
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE,
+    port: process.env.DB_PORT
 };
 
 const connection = mysql.createConnection(dbConfig);
@@ -157,6 +158,7 @@ const generateTitle = async (text) => {
         throw error;
     }
 };
+
 
 
 

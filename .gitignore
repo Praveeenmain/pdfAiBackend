@@ -3,7 +3,7 @@
 *.dll
 *.so
 *.class
-
+.env
 # Ignore dependency directories
 node_modules/
 venv/
