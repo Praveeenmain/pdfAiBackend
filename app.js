@@ -15,13 +15,13 @@ const ytdl = require('ytdl-core');
 // Create Express app
 const app = express();
 const port = 3002;
-const CLIENT_ID = process.env.CLIENT_ID;
+
 // OpenAI API setup
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // Make sure to set this environment variable
 const openai = new OpenAI({
     apiKey: OPENAI_API_KEY // Use your actual API key here
 });
-
+const client=process.env.client
 // MySQL database connection configuration
 const dbConfig = {
     host: process.env.DB_HOST,
