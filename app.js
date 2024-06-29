@@ -12,16 +12,17 @@ const path = require('path');
 const mammoth = require('mammoth');
 const util = require('util');
 const ytdl = require('ytdl-core');
+
 // Create Express app
 const app = express();
-const port = 3002;
+const port = 3001;
 
 // OpenAI API setup
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // Make sure to set this environment variable
 const openai = new OpenAI({
     apiKey: OPENAI_API_KEY // Use your actual API key here
 });
-const client=process.env.client
+
 // MySQL database connection configuration
 const dbConfig = {
     host: process.env.DB_HOST,
@@ -35,6 +36,7 @@ const connection = mysql.createConnection(dbConfig);
 const query = util.promisify(connection.query).bind(connection);
 
 
+  
 // Connect to the database
 connection.connect((err) => {
     if (err) {
@@ -48,6 +50,9 @@ connection.connect((err) => {
 app.use(bodyParser.json());
 app.use(cors());
 const pool = mysql.createPool(dbConfig);
+
+
+  
   
 // Multer setup for handling file uploads
 const storage = multer.diskStorage({
@@ -163,6 +168,43 @@ const generateTitle = async (text) => {
 
 
 
+
+// Example: Handle a POST request with a JWT token in the body
+// server.js
+
+// Route to save token
+app.post('/api/store-token', (req, res) => {
+    const { name, email } = req.body;
+
+    // Check if user with the provided email already exists
+    const sqlCheck = 'SELECT * FROM users WHERE email = ?';
+    connection.query(sqlCheck, [email], (err, rows) => {
+        if (err) {
+            console.error('Error checking user:', err);
+            res.status(500).json({ error: 'Failed to store token' });
+            return;
+        }
+
+        // If user with email exists, return an error
+        if (rows.length > 0) {
+            console.log('User with email already exists');
+            res.status(200).json({ error: 'User with email already exists' });
+            return;
+        }
+
+        // If user doesn't exist, insert the new user
+        const sqlInsert = 'INSERT INTO users (name, email) VALUES (?,?)';
+        connection.query(sqlInsert, [name, email], (err, result) => {
+            if (err) {
+                console.error('Error storing token:', err);
+                res.status(500).json({ error: 'Failed to store token' });
+            } else {
+                console.log('Name and email stored successfully:', result);
+                res.status(200).json({ message: 'Token stored successfully' });
+            }
+        });
+    });
+});
 
 // Endpoint to upload and transcribe audio
 app.post('/upload-transcribe', (req, res) => {
