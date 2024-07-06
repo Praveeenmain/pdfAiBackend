@@ -1100,6 +1100,30 @@ app.delete('/students/:id', (req, res) => {
     });
 });
 
+app.get('/students/:id', (req, res) => {
+    const { id } = req.params;
+
+    // Validate the ID parameter
+    if (!id) {
+        return res.status(400).send({ error: 'Student ID is required' });
+    }
+
+    const sql = 'DELETE FROM students WHERE id = ?';
+
+    pool.query(sql, [id], (err, results) => {
+        if (err) {
+            return res.status(500).send({ error: 'Database error' });
+        }
+
+        // Check if any rows were affected (i.e., if a student was actually deleted)
+        if (results.affectedRows === 0) {
+            return res.status(404).send({ message: 'Student not found' });
+        }
+
+        res.status(200).send({ message: 'Student deleted successfully' });
+    });
+});
+
 
 
 // Start the server
