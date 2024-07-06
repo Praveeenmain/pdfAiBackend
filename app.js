@@ -174,7 +174,7 @@ const generateTitle = async (text) => {
                 }
               
             ],
-                language: "en"
+             
         });
         return response.choices[0].message.content.trim();
     } catch (error) {
@@ -985,21 +985,28 @@ app.post('/askdb', async (req, res) => {
     }
   
     try {
-      const questionEmbedding = await generateEmbedding(question);
-  
+      // Promisify MySQL query function
       const query = util.promisify(connection.query).bind(connection);
   
+      // Query all data sources asynchronously
       const results = await Promise.all([
-        query("SELECT text, vector FROM myvectortable"),
-        query("SELECT transcription, embedding FROM YouTube"),
-        query("SELECT text, vector FROM previouspapers"),
-        query("SELECT transcription, embedding FROM Audio")
+        query("SELECT text, vector FROM myvectortable LIMIT 1"),
+        query("SELECT transcription, embedding FROM YouTube LIMIT 1"),
+        query("SELECT text, vector FROM previouspapers LIMIT 1"),
+        query("SELECT transcription, embedding FROM Audio LIMIT 1")
       ]);
   
+      // Destructure results
       const [myvectortableResults, youTubeResults, previousPapersResults, audioResults] = results;
   
       let combinedAnswer = '';
       let combinedSimilarity = 0;
+  
+      // Placeholder function to calculate similarity (replace with actual implementation)
+      const calculateSimilarity = (context, question) => {
+        return 0.7; // Replace with actual similarity calculation logic
+      };
+  
       const dataSources = [
         { results: myvectortableResults, fieldText: 'text', fieldVector: 'vector' },
         { results: youTubeResults, fieldText: 'transcription', fieldVector: 'embedding' },
@@ -1007,12 +1014,14 @@ app.post('/askdb', async (req, res) => {
         { results: audioResults, fieldText: 'transcription', fieldVector: 'embedding' }
       ];
   
+      // Process each data source
       for (const { results: dataSource, fieldText, fieldVector } of dataSources) {
         if (dataSource.length > 0) {
           const { [fieldText]: context, [fieldVector]: embedding } = dataSource[0];
   
+          // Call OpenAI API to get response
           const openaiResponse = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "gpt-4o", // Replace with your desired OpenAI model
             messages: [
               { role: "system", content: "give short in 2-4 lines." },
               { role: "user", content: `Answer the question based on the following context:\n\n${context}\n\nQuestion: ${question}` }
@@ -1020,8 +1029,9 @@ app.post('/askdb', async (req, res) => {
             max_tokens: 200
           });
   
+          // Extract answer and calculate similarity
           const answer = openaiResponse.choices[0].message.content.trim();
-          const similarity = 0.7; // Placeholder, replace with actual similarity calculation
+          const similarity = calculateSimilarity(context, question);
   
           // Combine results with weighted similarity
           combinedAnswer += `${answer}\n\n`;
@@ -1029,14 +1039,13 @@ app.post('/askdb', async (req, res) => {
         }
       }
   
+      // Return combined answer and similarity
       res.status(200).json({ answer: combinedAnswer.trim(), similarity: combinedSimilarity });
     } catch (error) {
       console.error('Error processing request:', error);
       res.status(500).json({ error: 'Error processing request' });
     }
   });
-
-
 
 // Start the server
 app.listen(port, () => {
