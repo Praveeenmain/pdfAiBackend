@@ -977,7 +977,84 @@ app.delete('/pqfile/:id', (req, res) => {
 });
 
 
+app.post('/askdb', async (req, res) => {
+  const { question } = req.body;
 
+  if (!question) {
+    return res.status(400).json({ error: 'Question is required' });
+  }
+
+  try {
+    const questionEmbedding = await generateEmbedding(question);
+
+    const query = util.promisify(connection.query).bind(connection);
+
+    const results = await Promise.all([
+      query("SELECT text,vector FROM myvectortable"),
+      query("SELECT transcription, embedding FROM YouTube"),
+      query("SELECT text,vector FROM previouspapers"),
+      query("SELECT transcription, embedding FROM Audio")
+    ]);
+
+    const [myvectortableResults, youTubeResults, previousPapersResults, audioResults] = results;
+
+    // Check for data in each table and handle appropriately
+    const dataSources = [];
+    if (myvectortableResults.length > 0) {
+      dataSources.push({ source: 'myvectortable', results: myvectortableResults });
+    }
+    if (youTubeResults.length > 0) {
+      dataSources.push({ source: 'YouTube', results: youTubeResults });
+    }
+    if (previousPapersResults.length > 0) {
+      dataSources.push({ source: 'previouspapers', results: previousPapersResults });
+    }
+    if (audioResults.length > 0) {
+      dataSources.push({ source: 'Audio', results: audioResults });
+    }
+
+    if (dataSources.length === 0) {
+      return res.status(404).json({ error: 'No data found in any source' });
+    }
+
+    // Process each data source and combine results
+    let combinedAnswer = '';
+    let combinedSimilarity = 0;
+    for (const dataSource of dataSources) {
+      for (const result of dataSource.results) {
+        const { transcription, embedding } = result;
+
+        if (!transcription || !embedding) {
+          console.warn(`Skipping result from ${dataSource.source} due to missing data`);
+          continue;
+        }
+
+        const parsedEmbedding = JSON.parse(embedding);
+        const similarity = cosineSimilarity(questionEmbedding, parsedEmbedding);
+
+        const openaiResponse = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: "You are a helpful assistant." },
+            { role: "user", content: `Answer the question based on the following context:\n\n${transcription}\n\nQuestion: ${question}` }
+          ],
+          max_tokens: 200
+        });
+
+        const answer = openaiResponse.choices[0].message.content.trim();
+
+        // Combine results with weighted similarity
+        combinedAnswer += `${answer}\n\n`;
+        combinedSimilarity += similarity * (1 / dataSources.length); // Weight by number of sources
+      }
+    }
+
+    res.status(200).json({ answer: combinedAnswer.trim(), similarity: combinedSimilarity });
+  } catch (error) {
+    console.error('Error processing request:', error);
+    res.status(500).json({ error: 'Error processing request' });
+  }
+});
 
 
 
