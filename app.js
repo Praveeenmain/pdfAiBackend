@@ -172,7 +172,9 @@ const generateTitle = async (text) => {
                     role: "user",
                     content: text
                 }
-            ]
+              
+            ],
+                language: "en"
         });
         return response.choices[0].message.content.trim();
     } catch (error) {
