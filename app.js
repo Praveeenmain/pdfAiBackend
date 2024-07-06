@@ -12,7 +12,7 @@ const path = require('path');
 const mammoth = require('mammoth');
 const util = require('util');
 const ytdl = require('ytdl-core');
-
+const { createClient } = require("@deepgram/sdk");
 // Create Express app
 const app = express();
 const port = 3001;
@@ -127,19 +127,36 @@ const generateEmbedding = async (text) => {
 };
 
 // Function to transcribe audio using OpenAI
+
+
 const audioFun = async (audioBuffer) => {
     try {
-        const transcription = await openai.audio.transcriptions.create({
-            file: audioBuffer,
-            model: "whisper-1",
-            target_language: "en"
-        });
-        return transcription.text;
+        // STEP 1: Create a Deepgram client using the API key
+        const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+
+        // STEP 2: Call the transcribeFile method with the audio payload and options
+        const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
+            audioBuffer, // Use the provided audio buffer
+            {
+                model: "nova-2",
+                smart_format: true,
+            }
+        );
+
+        // Log the result to understand its structure
+        console.log("Transcription result:", result.results.channels[0].alternatives[0].transcript);
+
+        // Extract words from the result object
+        return result.results.channels[0].alternatives[0].transcript;
+
     } catch (error) {
         console.error("Error transcribing audio:", error);
         throw error;
     }
 };
+
+
+
 
 // New function to generate a title from the transcription text
 const generateTitle = async (text) => {
