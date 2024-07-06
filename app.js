@@ -1047,6 +1047,61 @@ app.post('/askdb', async (req, res) => {
     }
   });
 
+
+  app.post('/students', (req, res) => {
+    const { name, studentNumber, email } = req.body;
+    
+    if (!name || !studentNumber || !email) {
+        return res.status(400).send({ error: 'Please provide name, student number, and email' });
+    }
+
+    const sql = 'INSERT INTO students(name, student_number, email) VALUES (?, ?, ?)';
+    pool.query(sql, [name, studentNumber, email], (err, result) => {
+        if (err) {
+            return res.status(500).send({ error: 'Database error' });
+        }
+        res.status(201).send({ message: 'Student added successfully', studentId: result.insertId });
+    });
+});
+
+app.get('/students', (req, res) => {
+    const sql = 'SELECT * FROM students';
+    
+    pool.query(sql, (err, results) => {
+        if (err) {
+            return res.status(500).send({ error: 'Database error' });
+        }
+        res.status(200).send({ students: results });
+    });
+});
+
+// Endpoint to delete a student by ID
+app.delete('/students/:id', (req, res) => {
+    const { id } = req.params;
+
+    // Validate the ID parameter
+    if (!id) {
+        return res.status(400).send({ error: 'Student ID is required' });
+    }
+
+    const sql = 'DELETE FROM students WHERE id = ?';
+
+    pool.query(sql, [id], (err, results) => {
+        if (err) {
+            return res.status(500).send({ error: 'Database error' });
+        }
+
+        // Check if any rows were affected (i.e., if a student was actually deleted)
+        if (results.affectedRows === 0) {
+            return res.status(404).send({ message: 'Student not found' });
+        }
+
+        res.status(200).send({ message: 'Student deleted successfully' });
+    });
+});
+
+
+
 // Start the server
 app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
