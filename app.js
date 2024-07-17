@@ -1042,25 +1042,25 @@ app.post('/askdb', async (req, res) => {
   
       // Determine which databases to query based on keywords
       if (question.toLowerCase().includes('video') || question.toLowerCase().includes('youtube')) {
-        databases.push({ name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' });
+        databases.push({ name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube", fieldText: 'transcription', fieldVector: 'embedding' });
       }
       if (question.toLowerCase().includes('paper') || question.toLowerCase().includes('previous')) {
-        databases.push({ name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers LIMIT 1", fieldText: 'text', fieldVector: 'vector' });
+        databases.push({ name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers", fieldText: 'text', fieldVector: 'vector' });
       }
-      if (question.toLowerCase().includes('audio') || question.toLowerCase().includes('notes')) {
-        databases.push({ name: "Audio", queryText: "SELECT transcription, embedding FROM Audio LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' });
+      if (question.toLowerCase().includes('audio')) {
+        databases.push({ name: "Audio", queryText: "SELECT transcription, embedding FROM Audio", fieldText: 'transcription', fieldVector: 'embedding' });
       }
-      if (question.toLowerCase().includes('pdf')) {
-        databases.push({ name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable LIMIT 1", fieldText: 'text', fieldVector: 'vector' });
+      if (question.toLowerCase().includes('question')|| question.toLowerCase().includes('notes')) {
+        databases.push({ name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable", fieldText: 'text', fieldVector: 'vector' });
       }
   
       // If no keywords match, default to querying all databases
       if (databases.length === 0) {
         databases.push(
-          { name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' },
-          { name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers LIMIT 1", fieldText: 'text', fieldVector: 'vector' },
-          { name: "Audio", queryText: "SELECT transcription, embedding FROM Audio LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' },
-          { name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable LIMIT 1", fieldText: 'text', fieldVector: 'vector' }
+          { name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube", fieldText: 'transcription', fieldVector: 'embedding' },
+          { name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers", fieldText: 'text', fieldVector: 'vector' },
+          { name: "Audio", queryText: "SELECT transcription, embedding FROM Audio", fieldText: 'transcription', fieldVector: 'embedding' },
+          { name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable", fieldText: 'text', fieldVector: 'vector' }
         );
       }
   
@@ -1068,7 +1068,10 @@ app.post('/askdb', async (req, res) => {
       for (const db of databases) {
         const queryResult = await query(db.queryText);
         if (queryResult.length > 0) {
-          results.push({ context: queryResult[0][db.fieldText], embedding: queryResult[0][db.fieldVector] });
+          results.push(...queryResult.map(res => ({
+            context: res[db.fieldText],
+            embedding: res[db.fieldVector]
+          })));
         }
       }
   
@@ -1097,7 +1100,7 @@ app.post('/askdb', async (req, res) => {
       console.error('Error processing request:', error);
       res.status(500).json({ error: 'Error processing request' });
     }
-});
+  });
   
   
 
