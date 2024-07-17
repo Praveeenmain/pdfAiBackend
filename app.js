@@ -427,10 +427,6 @@ app.put('/updateTitle/:id', (req, res) => {
     });
   });
   
-  
-  
-  
-
 // Endpoint to upload and store notes
 app.post('/uploadnotes', upload.array('files', 3), async (req, res) => {
     try {
