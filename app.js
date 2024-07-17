@@ -427,6 +427,10 @@ app.put('/updateTitle/:id', (req, res) => {
     });
   });
   
+  
+  
+  
+
 // Endpoint to upload and store notes
 app.post('/uploadnotes', upload.array('files', 3), async (req, res) => {
     try {
@@ -972,78 +976,6 @@ app.delete('/pqfile/:id', (req, res) => {
     });
 });
 
-
-app.post('/askdb', async (req, res) => {
-    const { question } = req.body;
-  
-    if (!question) {
-      return res.status(400).json({ error: 'Question is required' });
-    }
-  
-    try {
-      // Promisify MySQL query function
-      const query = util.promisify(connection.query).bind(connection);
-  
-      // Query all data sources asynchronously
-      const results = await Promise.all([
-        query("SELECT text, vector FROM myvectortable LIMIT 1"),
-        query("SELECT transcription, embedding FROM YouTube LIMIT 1"),
-        query("SELECT text, vector FROM previouspapers LIMIT 1"),
-        query("SELECT transcription, embedding FROM Audio LIMIT 1")
-      ]);
-  
-      // Destructure results
-      const [myvectortableResults, youTubeResults, previousPapersResults, audioResults] = results;
-  
-      let combinedAnswer = '';
-      let combinedSimilarity = 0;
-  
-      // Placeholder function to calculate similarity (replace with actual implementation)
-      const calculateSimilarity = (context, question) => {
-        return 0.7; // Replace with actual similarity calculation logic
-      };
-  
-      const dataSources = [
-        { results: myvectortableResults, fieldText: 'text', fieldVector: 'vector' },
-        { results: youTubeResults, fieldText: 'transcription', fieldVector: 'embedding' },
-        { results: previousPapersResults, fieldText: 'text', fieldVector: 'vector' },
-        { results: audioResults, fieldText: 'transcription', fieldVector: 'embedding' }
-      ];
-  
-      // Process each data source
-      for (const { results: dataSource, fieldText, fieldVector } of dataSources) {
-        if (dataSource.length > 0) {
-          const { [fieldText]: context, [fieldVector]: embedding } = dataSource[0];
-  
-          // Call OpenAI API to get response
-          const openaiResponse = await openai.chat.completions.create({
-            model: "gpt-4o", // Replace with your desired OpenAI model
-            messages: [
-              { role: "system", content: "give short in 2-4 lines." },
-              { role: "user", content: `Answer the question based on the following context:\n\n${context}\n\nQuestion: ${question}` }
-            ],
-            max_tokens: 200
-          });
-  
-          // Extract answer and calculate similarity
-          const answer = openaiResponse.choices[0].message.content.trim();
-          const similarity = calculateSimilarity(context, question);
-  
-          // Combine results with weighted similarity
-          combinedAnswer += `${answer}\n\n`;
-          combinedSimilarity += similarity * (1 / dataSources.length); // Weight by number of sources
-        }
-      }
-  
-      // Return combined answer and similarity
-      res.status(200).json({ answer: combinedAnswer.trim(), similarity: combinedSimilarity });
-    } catch (error) {
-      console.error('Error processing request:', error);
-      res.status(500).json({ error: 'Error processing request' });
-    }
-  });
-
-
   app.post('/students', (req, res) => {
     const { name, studentNumber, email } = req.body;
     
@@ -1096,8 +1028,78 @@ app.delete('/students/:id', (req, res) => {
     });
 });
 
-
-
+app.post('/askdb', async (req, res) => {
+    const { question } = req.body;
+  
+    if (!question) {
+      return res.status(400).json({ error: 'Question is required' });
+    }
+  
+    try {
+      const query = util.promisify(connection.query).bind(connection);
+      
+      const databases = [];
+  
+      // Determine which databases to query based on keywords
+      if (question.toLowerCase().includes('video') || question.toLowerCase().includes('youtube')) {
+        databases.push({ name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' });
+      }
+      if (question.toLowerCase().includes('paper') || question.toLowerCase().includes('previous')) {
+        databases.push({ name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers LIMIT 1", fieldText: 'text', fieldVector: 'vector' });
+      }
+      if (question.toLowerCase().includes('audio') || question.toLowerCase().includes('notes')) {
+        databases.push({ name: "Audio", queryText: "SELECT transcription, embedding FROM Audio LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' });
+      }
+      if (question.toLowerCase().includes('pdf')) {
+        databases.push({ name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable LIMIT 1", fieldText: 'text', fieldVector: 'vector' });
+      }
+  
+      // If no keywords match, default to querying all databases
+      if (databases.length === 0) {
+        databases.push(
+          { name: "YouTube", queryText: "SELECT transcription, embedding FROM YouTube LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' },
+          { name: "previouspapers", queryText: "SELECT text, vector FROM previouspapers LIMIT 1", fieldText: 'text', fieldVector: 'vector' },
+          { name: "Audio", queryText: "SELECT transcription, embedding FROM Audio LIMIT 1", fieldText: 'transcription', fieldVector: 'embedding' },
+          { name: "myvectortable", queryText: "SELECT text, vector FROM myvectortable LIMIT 1", fieldText: 'text', fieldVector: 'vector' }
+        );
+      }
+  
+      const results = [];
+      for (const db of databases) {
+        const queryResult = await query(db.queryText);
+        if (queryResult.length > 0) {
+          results.push({ context: queryResult[0][db.fieldText], embedding: queryResult[0][db.fieldVector] });
+        }
+      }
+  
+      if (results.length === 0) {
+        return res.status(404).json({ error: 'No results found' });
+      }
+  
+      // Create a combined context from all results
+      const combinedContext = results.map(res => res.context).join("\n");
+  
+      // Call OpenAI API to get response
+      const openaiResponse = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: "give short in 2-4 lines." },
+          { role: "user", content: `Answer the question based on the following context:\n\n${combinedContext}\n\nQuestion: ${question}` }
+        ],
+        max_tokens: 200
+      });
+  
+      const answer = openaiResponse.choices[0].message.content.trim();
+      const similarity = 1; // Adjust if needed
+  
+      res.status(200).json({ answer: answer, similarity });
+    } catch (error) {
+      console.error('Error processing request:', error);
+      res.status(500).json({ error: 'Error processing request' });
+    }
+});
+  
+  
 
 
 
